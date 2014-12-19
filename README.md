@@ -1,4 +1,4 @@
 PracticalMachineLearning
 ========================
 
-Practical Machine Learning, Coursera, December 2014
+This repository contains the Rmd, md, R and html files from my Coursera Practical Machine Learning project.
