@@ -1,0 +1,164 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "S. Kairs"
+date: "December 9, 2014"
+output: html_document
+---
+
+## Executive Summary  
+Personal fitness devices such as Jawbone Up, Nike FuelBand and Fitbit allow users to collect a significant amount of data about their movements.  Often, these devices are used to track quantity of exercise performed and not the quality of the movement.  In this report, we explore whether it is possible to build a machine learning algorithm to distinguish between correctly performed weight lifting exercises and four different types of incorrect movement.  
+
+The analysis is prepared as part of the [Practical Machine Learning][courselink] course, offered by [Johns Hopkins University][jhu] on [Coursera][coursera].  The Weight Lifting Exercises data set is generously licensed under the Creative Commons license (CC BY-SA) by the authors.  ([Qualitative Activity Recognition of Weight Lifting Exercises, Velleso, E., 2013][paperlink])  
+```{r echo=FALSE, results='hide', error=FALSE, message=FALSE, warning=FALSE}
+library(AppliedPredictiveModeling)
+library(caret)
+library(ggplot2)
+library(RColorBrewer)
+library(Hmisc)
+library(plyr)
+library(rpart)
+library(randomForest)
+```
+
+## Acquiring & cleaning the data  
+The training and testing sets are downloaded from a mirror specified on our course website, but the data can also be sourced from the [link provided][datalink] on the [project information page][project_info].  The training set is a dataframe of 19622 observations of 159 variables.  The outcome variable which we wish to predict is `classe`.  
+```{r, echo=FALSE}
+set.seed(32979)
+data_directory <- "data"
+
+fileURL1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+dataFile1 <- "pml-training.csv"
+dataPath1 <- paste(data_directory, dataFile1, sep="/")
+
+if (!file.exists(dataPath1)){
+    download.file(fileURL1, destfile=dataPath1, method="curl")
+   }
+
+fileURL2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+dataFile2 <- "pml-testing.csv"
+dataPath2 <- paste(data_directory, dataFile2, sep="/")
+
+if (!file.exists(dataPath2)){
+    download.file(fileURL2, destfile=dataPath2, method="curl")
+}
+
+##Import data
+trainPML <- read.csv(file=dataPath1, row.names=NULL, na.strings=c("NA","#DIV/0!"), as.is=TRUE)
+trainPML <- trainPML[,-1]
+```
+The variable `x`, which appears to be line or record number, is highly correlated with `classe` as the observations seems to have been recorded serially by `classe`.  As we cannot expect the testing set or further data to follow this convention, `x` is removed from consideration as a potential predictor.  
+
+Variables for which most of the recorded observations are 'NA' are likewise removed, along with date/time stamp and window information, leaving 53 predictor variables and `classe`.  
+
+```{r echo=FALSE}
+#Clean Data
+trainPML$user_name <- factor(trainPML$user_name)
+trainPML$cvtd_timestamp <- strptime(trainPML$cvtd_timestamp[1], format="%m/%d/%Y %H:%M")
+trainPML$new_window <- factor(trainPML$new_window)
+trainPML$num_window <- factor(trainPML$num_window)
+trainPML$classe <- factor(trainPML$classe)
+
+trainSmall <- trainPML[,c(1,7:10,36:48,59:67,83:85,101,112:123,139,150:159)]
+```
+
+## Exploratory Analysis
+```{r echo=FALSE}
+PCA <- preProcess(trainSmall[,c(-1,-54)], method="pca", thresh = 0.8)
+predictPCA <- predict(PCA, trainSmall[,c(-1,-54)])
+```
+Using the cleaned data set, we performed a principal component analysis to determine whether the predictor variables can be further reduced before modelling.  PCA indicates that 80% of the variance can be explained by `r PCA$numComp` principal components.  
+
+## Model Building  
+We split the training data set into a smaller train and testing set.  90% of the data goes to the training set, while 10% is held out for a cross-validation set to allow us to better estimate the out of sample error.  This hold out set will also give us greater confidence in the model's performance and allow us to catch errors before running the model against into the project submission test set.
+
+```{r}
+set.seed(198082)
+inTrain <- createDataPartition(trainSmall$classe, p = 0.9)[[1]]
+train1 <- trainSmall[inTrain,]
+test1 <- trainSmall[-inTrain,]
+```
+
+### CART model
+A CART model is fitted using the `rpart` method for the `train` function in the `caret` package.  The default settings are used. 
+```{r}
+modelFitA <- train(classe ~ ., method = "rpart", data=train1)
+predictions <- predict(modelFitA, train1)
+CMA <- confusionMatrix(predictions, train1$classe)
+print(CMA)
+```
+The in sample error is rather high, with accuracy of only `r round(CMA$overall[1],4)` in the training set.  No further work is performed with the `rpart` method.  
+
+### Random Forest  
+A Random Forest model is fitted using the `rf` method for the `train` function in the `caret` package.  No pre-processing is used. Bootstrapping is used for resampling.  We then predict the `classe` value for the test set and generate a confusion matrix to evaluate our results.  
+
+Please note: The models are commented out here because they took several hours to build on our local machine.  Please uncomment the script lines and run them to reproduce our prediction models.  Since each tree in a random forest is built independently, this process can benefit from multi-threading but it was beyond the scope of this course project to set up and evaluate that architecture.    
+```{r}
+# modelFit1 <- train(classe ~ ., method = "rf", data=train1, type=2, 
+#                    importance=TRUE, prox=TRUE)
+# predictions1 <- predict(modelFit1, newdata = test1)
+# CM1 <- confusionMatrix(predictions1, test1$classe)
+```
+The cross-validated accuracy for this model is 0.9949.  
+
+Concerned that the out of sample error may not be well represented, we fit a Random Forest model with 10 repeats of 10-fold cross-validation.  
+```{r}
+# modelFit2 <- train(classe ~ ., method = "rf", data=train1, type=2, 
+#                    importance=TRUE, prox=TRUE, 
+#                    trControl=trainControl(method="repeatedcv", number=10))
+# predictions2 <- predict(modelFit2, newdata = test1)
+# CM2 <- confusionMatrix(predictions2, test1$classe)
+```
+The cross-validated accuracy for this model is 0.9954.  We expect approximately 5 samples in 1000 to be misclassified.  This is equitable performance to model 1, without the 10 turns of 10-fold crossvalidation, but since we have already fit this model we will move forward with it.  Please see the confusion matrix for this model in the figure below:   
+
+```{r echo=FALSE}
+df <- data.frame(CM2$table)
+df <- ddply(df, .(Reference), transform, normFreq = Freq / sum(Freq))
+
+myPalette <- colorRampPalette((brewer.pal(9, "YlOrRd")))
+colors <- scale_fill_gradientn(colours = myPalette(100), limits=c(0, 1))
+p2 <- ggplot(data.frame(df)) + geom_tile(aes(Reference, Prediction, fill=normFreq)) + 
+    colors + labs(title="Normalized Confusion Matrix, Model 2")
+
+p2 <- p2 + geom_text(data = data.frame(df), 
+                     aes(label = round(normFreq,4), y = Prediction, x = Reference), 
+                     color = "black") + guides(fill=guide_legend(title="Normalized Frequency"))
+
+p2
+```
+
+## Test Set Evaluation  
+The testing set data are imported and cleaned using the same method as for the training set.  The cross-validated model (`modelFit2`, above) is used to predict the unknown `classe` variable for all records.  These values are exported to individual files for upload to the course project website, please see the code block below.  Our model predicted 20 of 20 the test cases correctly, as evaluated by the course submission website.
+
+```{r}
+testPML <- read.csv(file=dataPath2, row.names=NULL, na.strings=c("NA","#DIV/0!"), as.is=TRUE)
+testPML <- testPML[,-1]
+
+##Clean Data
+testPML$user_name <- factor(testPML$user_name)
+testPML$cvtd_timestamp <- strptime(testPML$cvtd_timestamp[1], format="%m/%d/%Y %H:%M")
+testPML$new_window <- factor(testPML$new_window)
+testPML$num_window <- factor(testPML$num_window)
+
+##predict
+answers <- predict(modelFit2, newdata = testPML)
+answers <- as.character(answers)
+
+##create submission files
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+    
+    pml_write_files(answers)
+```
+
+
+[courselink]: http://class.coursera.org/predmachlearn-016/
+[jhu]: https://www.coursera.org/jhu
+[coursera]: https://www.coursera.org/
+[datalink]: http://groupware.les.inf.puc-rio.br/static/WLE/WearableComputing_weight_lifting_exercises_biceps_curl_variations.csv
+[paperlink]: https://www.d2.mpi-inf.mpg.de/sites/default/files/velloso13ahic.pdf
+[project_info]: http://groupware.les.inf.puc-rio.br/har#sbia_paper_section
